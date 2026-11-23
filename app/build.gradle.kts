@@ -82,7 +82,8 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.music.bitchord"
+        // The Local edition installs beside the official app rather than over it.
+        applicationId = "com.music.bitchord.local"
         // 26 keeps reach wide; real-time blur (RenderEffect) kicks in on API 31+,
         // Haze falls back to a translucent scrim below that.
         minSdk = 26
@@ -140,8 +141,8 @@ android {
     productFlavors {
         create("dev") {
             dimension = "env"
-            applicationId = "com.dev.bitchord"
-            resValue("string", "app_name", "BitChord Dev")
+            applicationId = "com.dev.bitchord.local"
+            resValue("string", "app_name", "BitChord Local")
         }
         create("prod") {
             dimension = "env"
@@ -518,6 +519,33 @@ val verifyDevInstall = tasks.register("verifyDevInstall") {
     }
 }
 tasks.matching { it.name == "installDevDebug" }.configureEach { finalizedBy(verifyDevInstall) }
+
+/*
+ * CI builds with `./gradlew assembleDebug`, which leaves its APKs under the
+ * flavor's directory. AGP already creates `assembleDebug` as the build type's
+ * lifecycle task, so this adds to it rather than registering a second one: it
+ * makes sure the prod variant is built and copies that variant's universal APK
+ * — the one ABI split that runs everywhere — to the standalone path the
+ * workflow uploads, `app/build/outputs/apk/debug/app-debug.apk`.
+ *
+ * `configureEach` waits for AGP to create the task instead of asking for it by
+ * name during configuration.
+ */
+tasks.matching { it.name == "assembleDebug" }.configureEach {
+    dependsOn("assembleProdDebug")
+    doLast {
+        val sourceDir = layout.buildDirectory.dir("outputs/apk/prod/debug").get().asFile
+        val universal = sourceDir.listFiles { file ->
+            file.isFile && file.name.startsWith("app-prod-") && file.name.endsWith("-universal-debug.apk")
+        }?.singleOrNull() ?: sourceDir.listFiles { file ->
+            file.isFile && file.name.endsWith("-debug.apk") && "universal" in file.name
+        }?.singleOrNull()
+            ?: throw GradleException("Expected the universal debug APK in $sourceDir")
+        val destination = layout.buildDirectory.file("outputs/apk/debug/app-debug.apk").get().asFile
+        destination.parentFile?.mkdirs()
+        universal.copyTo(destination, overwrite = true)
+    }
+}
 
 /*
  * The watch app rides inside the phone app, so "BitChord for Wear OS" in
