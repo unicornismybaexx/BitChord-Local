@@ -16,6 +16,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedContent
@@ -71,10 +72,12 @@ import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudOff
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.IosShare
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Sort
 import androidx.compose.material.icons.rounded.Upgrade
 import com.music.bitchord.data.listentogether.ServerConnectionState
@@ -134,7 +137,10 @@ import com.music.bitchord.auth.SpotifyLoginScreen
 import com.music.bitchord.auth.WebSessionMode
 import com.music.bitchord.auth.YtMusicLoginScreen
 import com.music.bitchord.data.AppUpdateChecker
+import com.music.bitchord.data.LocalBuild
 import com.music.bitchord.data.LocalMediaRepository
+import com.music.bitchord.data.artistart.ArtistArtKind
+import com.music.bitchord.data.artistart.LocalArtistArt
 import com.music.bitchord.data.listentogether.JamInviteLink
 import com.music.bitchord.data.listentogether.ListenTogether
 import com.music.bitchord.data.listentogether.partyQueueIndexOf
@@ -583,7 +589,34 @@ private fun BitChordApp(
     // rather than inside the bar because the page's scroll is what drives it,
     // and the page is a sibling of the bar rather than a child.
     val navBarScroll = rememberFloatingTabBarScrollConnection()
-    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    var selectedTab by rememberSaveable {
+        mutableIntStateOf(if (LocalBuild.OFFLINE_ONLY) 0 else TAB_HOME)
+    }
+    // ---- Artist artwork overrides ----
+    // A gallery pick replaces the artist page's own photograph and logo; the
+    // two files live in internal storage, so nothing here asks for a permission.
+    var artistArtMenuOpen by remember { mutableStateOf(false) }
+    var artistArtTarget by remember { mutableStateOf<String?>(null) }
+    var artistArtKind by remember { mutableStateOf(ArtistArtKind.BANNER) }
+    val artistArtScope = rememberCoroutineScope()
+    val artistArtPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        val artist = artistArtTarget
+        val kind = artistArtKind
+        artistArtTarget = null
+        if (uri != null && artist != null) {
+            artistArtScope.launch {
+                if (!LocalArtistArt.save(context, artist, kind, uri)) {
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.artist_art_save_failed),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
+        }
+    }
     // Explore loads the first time it's shown, not at launch beside Home.
     LaunchedEffect(selectedTab) {
         if (selectedTab == TAB_EXPLORE) viewModel.onExploreShown()
@@ -605,7 +638,7 @@ private fun BitChordApp(
     // Top Picks turns over each hour; coming back to the app after a
     // turn-over is an open too.
     LaunchedEffect(appForeground) {
-        if (appForeground) viewModel.refreshTopPicksIfStale()
+        if (appForeground && !LocalBuild.OFFLINE_ONLY) viewModel.refreshTopPicksIfStale()
     }
     // Where the two ends of opening and closing the player meet: the mini
     // player's cover reports itself here, the sheet its offset, and the player
@@ -842,8 +875,12 @@ private fun BitChordApp(
     val onboardingComplete by AppSettings.onboardingComplete.collectAsStateWithLifecycle()
     // Held through the slide away as well, so the glyphs don't turn dark over
     // the mesh while it is still on its way off the screen.
-    val onboardingShown = remember { MutableTransitionState(!onboardingComplete) }
-    onboardingShown.targetState = !onboardingComplete
+    // The welcome is a Listen Together name and a YouTube sign-in, neither of
+    // which exists in the Local edition; it goes straight to the library.
+    val onboardingShown = remember {
+        MutableTransitionState(!onboardingComplete && !LocalBuild.OFFLINE_ONLY)
+    }
+    onboardingShown.targetState = !onboardingComplete && !LocalBuild.OFFLINE_ONLY
     val onboardingVisible = onboardingShown.currentState || onboardingShown.targetState
 
     // ---- Navigation ----
@@ -1395,13 +1432,20 @@ private fun BitChordApp(
     val sharedLinkLabel = stringResource(R.string.shared_link)
     val openedFileLabel = stringResource(R.string.opened_file)
     val tabs = remember(homeLabel, exploreLabel, radioLabel, libraryLabel, searchLabel) {
-        listOf(
-            BottomTab(homeLabel, BitChordIcons.Home),
-            BottomTab(exploreLabel, BitChordIcons.TabExplore),
-            BottomTab(radioLabel, BitChordIcons.TabRadio),
-            BottomTab(libraryLabel, BitChordIcons.TabLibrary),
-            BottomTab(searchLabel, BitChordIcons.TabSearch),
-        )
+        // The Local edition has one place to be: the device's own music. The
+        // feeds, the mixes, and both searches are catalogue features and have
+        // no tab here at all.
+        if (LocalBuild.OFFLINE_ONLY) {
+            listOf(BottomTab(libraryLabel, BitChordIcons.TabLibrary))
+        } else {
+            listOf(
+                BottomTab(homeLabel, BitChordIcons.Home),
+                BottomTab(exploreLabel, BitChordIcons.TabExplore),
+                BottomTab(radioLabel, BitChordIcons.TabRadio),
+                BottomTab(libraryLabel, BitChordIcons.TabLibrary),
+                BottomTab(searchLabel, BitChordIcons.TabSearch),
+            )
+        }
     }
 
     val scope = rememberCoroutineScope()
@@ -2280,6 +2324,24 @@ private fun BitChordApp(
     } else {
         Manifest.permission.READ_EXTERNAL_STORAGE
     }
+    // The Local edition's one page: the whole device, as Songs / Artists /
+    // Albums / Playlists. Opening it is also what asks for the audio permission
+    // the folder needs to read.
+    val openLocalLibrary: () -> Unit = {
+        if (LocalBuild.OFFLINE_ONLY &&
+            detailStack.none { it.browseId == LocalBuild.LIBRARY_BROWSE_ID }
+        ) {
+            viewModel.openDetail(
+                browseId = LocalBuild.LIBRARY_BROWSE_ID,
+                title = context.getString(R.string.local_music),
+            )
+        }
+    }
+    LaunchedEffect(Unit) {
+        if (LocalBuild.OFFLINE_ONLY && !LocalMediaRepository.hasStoragePermission(context)) {
+            mediaPermissionLauncher.launch(mediaPermission)
+        }
+    }
     // The Search tab's Library source reads the Local Music folder, so it asks
     // for the same permission opening that folder does.
     val onSearchSourceChange: (SearchSource) -> Unit = { source ->
@@ -2944,8 +3006,15 @@ private fun BitChordApp(
     // Home itself hands back to the system, which is what actually closes or
     // minimizes the app. The gesture and the bar's back button both come here,
     // so they can never disagree about what is on top.
-    val canGoBack = navigator.entries.isNotEmpty() || detailStack.isNotEmpty() ||
-        selectedMoodGenre != null || selectedTab != TAB_HOME
+    // The Local edition's library page is its home, not a page over one: Back
+    // from it leaves the app, as Back from Home does in the full build.
+    val backableDetails = if (LocalBuild.OFFLINE_ONLY) {
+        detailStack.count { it.browseId != LocalBuild.LIBRARY_BROWSE_ID }
+    } else {
+        detailStack.size
+    }
+    val canGoBack = navigator.entries.isNotEmpty() || backableDetails > 0 ||
+        selectedMoodGenre != null || (!LocalBuild.OFFLINE_ONLY && selectedTab != TAB_HOME)
     val goBack: () -> Unit = {
         if (!navigator.pop() && !viewModel.closeMoodGenre()) selectedTab = TAB_HOME
     }
@@ -3556,6 +3625,13 @@ private fun BitChordApp(
                                     null
                                 },
                             )
+                        } else if (LocalBuild.OFFLINE_ONLY) {
+                            // The Local edition opens straight onto the device's
+                            // own library. If its page has been cleared (a tap on
+                            // the one tab, or Back landing here), reopen it rather
+                            // than ever drawing a feed.
+                            LaunchedEffect(destination) { openLocalLibrary() }
+                            Box(Modifier.fillMaxSize())
                         } else when ((destination as? AppDestination.Tab)?.index ?: selectedTab) {
                             TAB_HOME -> HomeScreen(
                                 state = visibleHomeState,
@@ -4286,10 +4362,68 @@ private fun BitChordApp(
                                     }
                                 }
                             }
+                            // The discrete artist-page artwork control: a small
+                            // pencil that opens the three choices, leaving the
+                            // header's own layout untouched.
+                            if (detail != null && detail.type == BrowseType.ARTIST &&
+                                detailActiveShelf == null
+                            ) {
+                                Box {
+                                    IconButton(onClick = {
+                                        artistArtTarget = detail.title
+                                        artistArtMenuOpen = true
+                                    }) {
+                                        Icon(
+                                            Icons.Rounded.Edit,
+                                            contentDescription = stringResource(R.string.edit_artist_art),
+                                            tint = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                    }
+                                    DropdownMenu(
+                                        expanded = artistArtMenuOpen,
+                                        onDismissRequest = { artistArtMenuOpen = false },
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.set_artist_banner)) },
+                                            onClick = {
+                                                artistArtMenuOpen = false
+                                                artistArtTarget = detail.title
+                                                artistArtKind = ArtistArtKind.BANNER
+                                                artistArtPicker.launch(
+                                                    PickVisualMediaRequest(
+                                                        ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                                    ),
+                                                )
+                                            },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.set_artist_logo)) },
+                                            onClick = {
+                                                artistArtMenuOpen = false
+                                                artistArtTarget = detail.title
+                                                artistArtKind = ArtistArtKind.LOGO
+                                                artistArtPicker.launch(
+                                                    PickVisualMediaRequest(
+                                                        ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                                    ),
+                                                )
+                                            },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.reset_artist_art)) },
+                                            onClick = {
+                                                artistArtMenuOpen = false
+                                                LocalArtistArt.reset(context, detail.title)
+                                            },
+                                        )
+                                    }
+                                }
+                            }
                             // Left of the account photo, on an artist page: iOS's
                             // share glyph, sending the artist's channel link — the
                             // one YouTube Music itself shares for an artist.
-                            if (detail != null && !isLocalDetail && detail.type == BrowseType.ARTIST &&
+                            if (!LocalBuild.OFFLINE_ONLY && detail != null && !isLocalDetail &&
+                                detail.type == BrowseType.ARTIST &&
                                 detailActiveShelf == null && detail.browseId.startsWith("UC")
                             ) {
                                 IconButton(
@@ -4322,7 +4456,20 @@ private fun BitChordApp(
                             // Not on a release page, whose pill already carries
                             // three of its own controls — Apple Music leaves the
                             // profile off its album pages too.
-                            if (!isReleaseDetail) TopBarAccountButton(
+                            //
+                            // The Local edition has no account to show, so the
+                            // same corner holds Settings itself: the way to the
+                            // equalizer, lyrics sources and every other local
+                            // preference.
+                            if (LocalBuild.OFFLINE_ONLY) {
+                                IconButton(onClick = { navigator.push(AppRoute.Settings) }) {
+                                    Icon(
+                                        Icons.Rounded.Settings,
+                                        contentDescription = stringResource(R.string.settings),
+                                        tint = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
+                            } else if (!isReleaseDetail) TopBarAccountButton(
                                 account = account,
                                 onClick = {
                                     if (signedIn) {
@@ -4363,8 +4510,10 @@ private fun BitChordApp(
                     selectedTab = index
 
                     // Every search tab tap resets the field, focuses it, and opens
-                    // the keyboard through SearchScreen's focus request.
-                    if (index == TAB_SEARCH) {
+                    // the keyboard through SearchScreen's focus request. The Local
+                    // edition has no search tab; its cleared page reopens itself
+                    // under the bar.
+                    if (!LocalBuild.OFFLINE_ONLY && index == TAB_SEARCH) {
                         viewModel.onQueryChange("")
                         searchFocusRequested = true
                     }

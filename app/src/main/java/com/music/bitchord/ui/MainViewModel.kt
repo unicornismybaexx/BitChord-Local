@@ -12,6 +12,7 @@ import com.music.bitchord.auth.profileId
 import com.music.bitchord.auth.sessionId
 import com.music.bitchord.auth.adjacentProfile
 import com.music.bitchord.data.AppUpdateChecker
+import com.music.bitchord.data.LocalBuild
 import com.music.bitchord.data.LocalMediaRepository
 import com.music.bitchord.data.LikeState
 import com.music.bitchord.data.YtMusicRepository
@@ -1580,14 +1581,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         startSearchPipeline()
         startSuggestPipeline()
         startTypeaheadMediaPipeline()
-        loadHome()
-        // Explore waits for its tab (see [onExploreShown]): its category list
-        // and the dozen-odd artwork browses after it went out at launch with
-        // Home's own requests, to the same host, for a page not yet opened.
-        if (_signedIn.value) {
-            loadLibrary()
-            loadAccount()
-            loadPlaylists()
+        // The Local edition opens on the device's own library, so it has no
+        // feed to fetch at launch — not Home, not the account, not the cloud
+        // playlists. Explore still waits for its tab (see [onExploreShown]),
+        // which this build does not have.
+        if (!LocalBuild.OFFLINE_ONLY) {
+            loadHome()
+            if (_signedIn.value) {
+                loadLibrary()
+                loadAccount()
+                loadPlaylists()
+            }
         }
         viewModelScope.launch {
             // drop(1): the current value is just the count so far, not a play.
@@ -1634,7 +1638,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // A leftover APK only means "Install Now" for the session that
             // downloaded it — see AppUpdateChecker.clearCache.
             AppUpdateChecker.clearCache(getApplication())
-            AppUpdateChecker.check()
+            if (!LocalBuild.OFFLINE_ONLY) AppUpdateChecker.check()
         }
     }
 

@@ -100,6 +100,7 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -132,6 +133,8 @@ import com.music.bitchord.data.matchesSearch
 import com.music.bitchord.data.sortedForLibrary
 import com.music.bitchord.data.useTrackTags
 import com.music.bitchord.ui.components.CoverPlaceholder
+import com.music.bitchord.data.LocalBuild
+import com.music.bitchord.data.artistart.LocalArtistArt
 import com.music.bitchord.data.canvas.AppleArtistArt
 import com.music.bitchord.data.DebugLog as Log
 import com.music.bitchord.data.canvas.AppleArtistArtRepository
@@ -388,6 +391,20 @@ fun DetailScreen(
         rawSongs.withIndex().associate { (i, s) -> s.videoId to ((if (byTag) s.trackNumber else null) ?: (i + 1)) }
     }
     val isArtist = page.type == BrowseType.ARTIST
+    // A gallery-picked photograph and logo for this artist, if the page has
+    // any. Read off internal storage and reread whenever one is set or reset —
+    // the revision is bumped by [LocalArtistArt] on both, which is what makes
+    // the header swap in place rather than on the next visit.
+    val artistArtRevision by LocalArtistArt.revision.collectAsStateWithLifecycle()
+    val platformContext = LocalContext.current
+    val localBanner = remember(page.browseId, page.title, isArtist, artistArtRevision) {
+        if (isArtist) LocalArtistArt.banner(platformContext, page.title) else null
+    }
+    val localLogo = remember(page.browseId, page.title, isArtist, artistArtRevision) {
+        if (isArtist) LocalArtistArt.logo(platformContext, page.title) else null
+    }
+    val localBannerUrl = remember(localBanner) { localBanner?.let { LocalArtistArt.model(it) } }
+    val localLogoUrl = remember(localLogo) { localLogo?.let { LocalArtistArt.model(it) } }
     // Whether the top release card's album is already saved isn't on the shelf
     // item; it is read off the album once, as soon as the card is known.
     val topReleaseId = if (isArtist) page.sections.topRelease()?.browseId else null
@@ -401,7 +418,10 @@ fun DetailScreen(
     }
     val songsLoading = page.songs is UiState.Loading
     LaunchedEffect(page.browseId, page.title, songsLoading) {
-        if (isArtist && !songsLoading) {
+        // The Local edition is the offline half of the app: an artist page is
+        // drawn from the files themselves and whatever artwork was picked for
+        // it, never a catalogue lookup.
+        if (isArtist && !LocalBuild.OFFLINE_ONLY && !songsLoading) {
             appleArt = AppleArtistArtRepository.artFor(page.browseId, page.title) { page.appleCatalogue() } ?: appleArt
         }
     }
@@ -417,7 +437,7 @@ fun DetailScreen(
     // other name starts the moment the page opens.
     val nameSettled = !page.title.looksLikeCredit() || page.songs !is UiState.Loading
     LaunchedEffect(page.browseId, page.title, nameSettled, signatureEnabled, signatureBaseUrl, signatureUpdates) {
-        if (!isArtist || !nameSettled) return@LaunchedEffect
+        if (!isArtist || LocalBuild.OFFLINE_ONLY || !nameSettled) return@LaunchedEffect
         val base = ArtistSignatureRepository.effectiveBaseUrl(signatureEnabled, signatureBaseUrl)
         if (base == null) {
             signature = null
@@ -502,6 +522,11 @@ fun DetailScreen(
     LaunchedEffect(page.browseId, page.title, credit, canvasEnabled, prioritizeSpotifyCanvas, disableSpotifyCanvas) {
         // An artist's clip is set below, by the lookup that finds it.
         if (isArtist) return@LaunchedEffect
+        // No catalogue lookups in the Local edition.
+        if (LocalBuild.OFFLINE_ONLY) {
+            canvas = null
+            return@LaunchedEffect
+        }
         if (!canvasEnabled || page.type != BrowseType.ALBUM) {
             canvas = null
             return@LaunchedEffect
@@ -515,7 +540,9 @@ fun DetailScreen(
     // An artist's clip comes with the same Apple lookup as its photograph.
     val artistVideo = appleArt?.videoUrl
     LaunchedEffect(artistVideo, canvasEnabled) {
-        if (isArtist) canvas = artistVideo?.takeIf { canvasEnabled }?.let { CanvasArtwork(url = it) }
+        if (isArtist && !LocalBuild.OFFLINE_ONLY) {
+            canvas = artistVideo?.takeIf { canvasEnabled }?.let { CanvasArtwork(url = it) }
+        }
     }
     val visibleCanvas = canvas?.takeIf { !disableSpotifyCanvas || it.source != CanvasSource.SPOTIFY }
 
@@ -575,7 +602,7 @@ fun DetailScreen(
                         canvas = visibleCanvas,
                         artHeight = artHeight,
                         listState = listState,
-                        heroUrl = appleArt?.heroUrl,
+                        heroUrl = localBannerUrl ?: appleArt?.heroUrl,
                         modifier = Modifier.matchParentSize(),
                     )
                 }
@@ -591,7 +618,14 @@ fun DetailScreen(
                 ) {
             item(key = "header") {
                 if (isArtist) {
-                    ArtistHeader(page = page, palette = palette, artHeight = artHeight, appleArt = appleArt, signature = signature)
+                    ArtistHeader(
+                        page = page,
+                        palette = palette,
+                        artHeight = artHeight,
+                        appleArt = appleArt,
+                        signature = signature,
+                        localLogoUrl = localLogoUrl,
+                    )
                 } else {
                     ReleaseHeader(
                         page = page,
@@ -1351,10 +1385,12 @@ private fun ArtistHeader(
     artHeight: Dp,
     appleArt: AppleArtistArt?,
     signature: ArtistSignature?,
+    /** A gallery-picked logo for this artist, which outranks the catalogue's. */
+    localLogoUrl: String? = null,
 ) {
     Box(Modifier.fillMaxWidth()) {
         Spacer(Modifier.fillMaxWidth().height(artHeight + HEADER_DROP - ARTIST_HEADER_LIFT))
-        val logoUrl = appleArt?.logoUrl
+        val logoUrl = localLogoUrl ?: appleArt?.logoUrl
         // Secondary provider: drawn only when Apple has no title logo.
         val signatureUrl = signature?.imageUrl.takeIf { logoUrl == null }
         val imageUrl = logoUrl ?: signatureUrl
@@ -1380,8 +1416,11 @@ private fun ArtistHeader(
             // (white paper to transparency, strokes to white); vectors are
             // tinted at draw time instead.
             val isSignatureScan = logoUrl == null && signature != null && !isSignatureSvg
-            val aspect = (if (logoUrl != null) appleArt?.logoAspect else signature?.aspect)
-                ?.coerceIn(0.4f, 6f) ?: 1f
+            val aspect = when {
+                localLogoUrl != null -> 1f
+                logoUrl != null -> appleArt?.logoAspect
+                else -> signature?.aspect
+            }?.coerceIn(0.4f, 6f) ?: 1f
             // Remembered, and at the size the URL already names: nothing about the
             // load waits on layout to decide how big to decode, and a recomposition
             // can't hand Coil a new request that cancels the one in flight.
@@ -1390,7 +1429,9 @@ private fun ArtistHeader(
             // since decoding past their pixels only spends memory.
             val request = remember(imageUrl, attempt) {
                 ImageRequest.Builder(context).data(imageUrl).apply {
-                    if (isSignatureSvg) {
+                    // The picked logo is whatever the file holds; decoding past
+                    // its pixels would only spend memory.
+                    if (isSignatureSvg && localLogoUrl == null) {
                         size(SVG_DECODE_WIDTH, (SVG_DECODE_WIDTH / aspect).roundToInt())
                     } else {
                         size(coil3.size.Size.ORIGINAL)

@@ -155,6 +155,7 @@ import com.music.bitchord.ui.components.thumbnailBorder
 import com.music.bitchord.ui.performance.resolvePerformanceRefreshRate
 import com.music.bitchord.ui.performance.supportedPerformanceRefreshRates
 import com.music.bitchord.data.model.Account
+import com.music.bitchord.data.LocalBuild
 import com.music.bitchord.data.LocalMediaRepository
 import com.music.bitchord.data.NerdStats
 import com.music.bitchord.data.scrobbling.LastFM
@@ -469,7 +470,9 @@ fun SettingsScreen(
                 modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 4.dp),
             )
 
-            SearchableSettingsGroup(search) {
+            // No account and no party in the Local edition: both are online
+            // services, and there is nothing here for them to sign in to.
+            if (!LocalBuild.OFFLINE_ONLY) SearchableSettingsGroup(search) {
                 val accountTitle = stringResource(R.string.account_integrations)
                 // What the row opens is the scrobbling screen, so the services it
                 // signs into are worth typing at this field even though none of
@@ -517,7 +520,12 @@ fun SettingsScreen(
             // above lists that as the module's own row now. Lossless itself is no
             // longer a setting at all — see
             // [SourceResolver.requestForNow][com.music.bitchord.data.sources.SourceResolver.requestForNow].
-            SearchableSettingsGroup(search, header = stringResource(R.string.audio_quality)) {
+            // Streaming sources have no part in an offline library, so their
+            // group (and the quality ceilings that qualify them) is absent.
+            if (!LocalBuild.OFFLINE_ONLY) SearchableSettingsGroup(
+                search,
+                header = stringResource(R.string.audio_quality),
+            ) {
                 val sourceTitle = stringResource(R.string.source)
                 val sourceSubtitle = stringResource(R.string.sources_subtitle)
                 row(sourceTitle, sourceSubtitle, "addon", "lossless") {
