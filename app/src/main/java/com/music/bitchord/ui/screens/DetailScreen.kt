@@ -97,6 +97,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -271,15 +272,16 @@ private const val ARTIST_LOGO_WIDTH = 0.82f
 
 /**
  * A picked logo is the artist's own wordmark rather than a catalogue title, so
- * it is given more room: up to 300 dp wide and 88 dp tall — or 104 dp when it
- * is closer to square, which by height alone would otherwise come out small.
- * Its own share of [ARTIST_LOGO_WIDTH] still applies, so it never touches the
- * screen's edges.
+ * it is given the page: 86% of the width — `fillMaxWidth(0.86f)` — up to 340
+ * dp, and between 84 and 156 dp of height. The floor keeps a wide wordmark,
+ * or a pixel-art PNG only a few hundred pixels across, drawn large instead of
+ * at its own small size; the ceiling keeps a near-square logo from swallowing
+ * the photo behind it.
  */
-private val LOCAL_LOGO_MAX_WIDTH = 300.dp
-private val LOCAL_LOGO_MAX_HEIGHT = 88.dp
-private val LOCAL_LOGO_MAX_HEIGHT_TALL = 104.dp
-private const val LOCAL_LOGO_TALL_BELOW_ASPECT = 2.5f
+private const val LOCAL_LOGO_WIDTH = 0.86f
+private val LOCAL_LOGO_MAX_WIDTH = 340.dp
+private val LOCAL_LOGO_MIN_HEIGHT = 84.dp
+private val LOCAL_LOGO_MAX_HEIGHT = 156.dp
 
 /** Wide, because that is what a wordmark is, until the file itself says. */
 private const val LOCAL_LOGO_ASSUME_ASPECT = 4f
@@ -1489,6 +1491,10 @@ private fun ArtistHeader(
                 model = request,
                 contentDescription = page.title,
                 contentScale = ContentScale.Fit,
+                // A picked logo is usually a pixel-art wordmark, so nearest
+                // neighbour keeps its blocks crisp at this size. The Apple
+                // title logos and ink signatures are drawn smooth as before.
+                filterQuality = if (localLogoUrl != null) FilterQuality.None else FilterQuality.Low,
                 colorFilter = tint,
                 onState = { state ->
                     when (state) {
@@ -1511,31 +1517,45 @@ private fun ArtistHeader(
                     }
                 },
                 modifier = Modifier
-                    .padding(top = 14.dp, bottom = if (isSignature) 6.dp else 20.dp)
+                    .padding(
+                        top = if (localLogoUrl != null) 12.dp else 14.dp,
+                        bottom = when {
+                            isSignature -> 6.dp
+                            localLogoUrl != null -> 12.dp
+                            else -> 20.dp
+                        },
+                    )
                     // Sized from the incoming width in layout rather than through a
                     // BoxWithConstraints, which would subcompose the image.
                     .layout { measurable, constraints ->
-                        // A picked logo gets the page's own width up to 300 dp,
-                        // and 88 dp of height — or 104 dp when it is closer to
-                        // square. The box is built around the picture's own
-                        // shape, so a wide wordmark scales up whole instead of
-                        // being letterboxed in a square and drawn small.
+                        // A picked logo gets 86% of the page up to 340 dp, and
+                        // 84–156 dp of height. The box is built around the
+                        // picture's own shape, so a wide wordmark scales up
+                        // whole instead of being letterboxed in a square and
+                        // drawn small; the width stays within `widest`, so a
+                        // tall logo never clips past the page's own margin.
                         val widest = if (localLogoUrl != null) {
                             minOf(
-                                constraints.maxWidth * ARTIST_LOGO_WIDTH,
+                                constraints.maxWidth * LOCAL_LOGO_WIDTH,
                                 LOCAL_LOGO_MAX_WIDTH.toPx(),
                             )
                         } else {
                             constraints.maxWidth * ARTIST_LOGO_WIDTH * sizeFactor
                         }
                         val tallest = if (localLogoUrl != null) {
-                            val tall = aspect < LOCAL_LOGO_TALL_BELOW_ASPECT
-                            (if (tall) LOCAL_LOGO_MAX_HEIGHT_TALL else LOCAL_LOGO_MAX_HEIGHT).toPx()
+                            LOCAL_LOGO_MAX_HEIGHT.toPx()
                         } else {
                             maxLogoHeight.toPx()
                         }
-                        val height = minOf(widest / aspect, tallest).roundToInt()
-                        val width = (height * aspect).roundToInt()
+                        val height = if (localLogoUrl != null) {
+                            (widest / aspect).roundToInt().coerceIn(
+                                LOCAL_LOGO_MIN_HEIGHT.roundToPx(),
+                                LOCAL_LOGO_MAX_HEIGHT.roundToPx(),
+                            )
+                        } else {
+                            minOf(widest / aspect, tallest).roundToInt()
+                        }
+                        val width = minOf((height * aspect).roundToInt(), widest.roundToInt())
                         val placeable = measurable.measure(Constraints.fixed(width, height))
                         layout(width, height) { placeable.place(0, 0) }
                     },
