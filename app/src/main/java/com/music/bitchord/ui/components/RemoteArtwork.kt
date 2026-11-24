@@ -7,6 +7,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.music.bitchord.data.animatedcover.AnimatedCover
 import com.music.bitchord.data.model.Song
 import com.music.bitchord.data.remote.RemoteArtworkStore
 
@@ -30,6 +32,17 @@ import com.music.bitchord.data.remote.RemoteArtworkStore
 @Composable
 fun rememberRemoteArtworkUrl(song: Song?): String? {
     val context = LocalContext.current
+    // A looping picture picked for this track — a GIF or animated WebP — is
+    // the cover everywhere the still one would have been drawn. Coil plays it
+    // (see BitChordApplication's decoder registry); the video formats are
+    // handled by the player's own clip surface instead and are skipped here.
+    val animatedRevision by AnimatedCover.revision.collectAsStateWithLifecycle()
+    val animated = remember(song?.videoId, song?.albumName, animatedRevision) {
+        AnimatedCover.imageFile(context, song)
+    }
+    val animatedUrl = remember(animated) { animated?.let(AnimatedCover::model) }
+    if (animatedUrl != null) return animatedUrl
+
     val key = song?.let { it.videoId to it.thumbnailUrl }
     var resolved by remember(key) { mutableStateOf(song?.thumbnailUrl) }
     LaunchedEffect(key) {

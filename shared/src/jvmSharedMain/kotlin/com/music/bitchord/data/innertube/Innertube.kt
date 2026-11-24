@@ -1,6 +1,7 @@
 package com.music.bitchord.data.innertube
 
 import com.music.bitchord.auth.normalizeDataSyncId
+import com.music.bitchord.data.NetworkPolicy
 import com.music.bitchord.data.DebugLog as Log
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -191,6 +192,8 @@ object Innertube {
      * so the id is found by shape rather than by a path that would rot.
      */
     private suspend fun fetchVisitorData(): String? {
+        // The Local edition never talks to YouTube — not even for a visitor id.
+        if (NetworkPolicy.offlineOnly) return null
         val body = client.get("https://www.youtube.com/sw.js_data") {
             header("User-Agent", WEB_USER_AGENT)
         }.bodyAsText()
@@ -667,6 +670,7 @@ object Innertube {
      * and the answer is around half a megabyte.
      */
     suspend fun webNext(videoId: String): JsonObject = withRetry(attempts = 2) {
+        if (NetworkPolicy.offlineOnly) throw IOException("Local edition: no network")
         client.post("$YOUTUBE_ORIGIN/youtubei/v1/next") {
             contentType(ContentType.Application.Json)
             parameter("prettyPrint", "false")
@@ -903,6 +907,7 @@ object Innertube {
         cpn: String,
         extras: HttpRequestBuilder.() -> Unit,
     ): Int {
+        if (NetworkPolicy.offlineOnly) return 0
         if (cookie != null) ensureSessionScope()
         val session = scope
         return client.get(baseUrl) {
@@ -1207,6 +1212,9 @@ object Innertube {
         language: String? = null,
         bodyExtras: JsonObjectBuilder.() -> Unit,
     ): JsonObject {
+        // Home, library, search, likes, playlists and the account menu all pass
+        // through here. The Local edition has none of them.
+        if (NetworkPolicy.offlineOnly) throw IOException("Local edition: no network")
         val hl = language ?: currentLanguage
         // This is the common authenticated request path: Home, Library,
         // likes, playlists, account menus and all their continuations pass
@@ -1291,6 +1299,7 @@ object Innertube {
         clientVersion: String = webRemixVersion,
         bodyExtras: JsonObjectBuilder.() -> Unit,
     ): JsonObject {
+        if (NetworkPolicy.offlineOnly) throw IOException("Local edition: no network")
         return withRetry {
             client.post("$MUSIC_BASE/$endpoint") {
                 contentType(ContentType.Application.Json)

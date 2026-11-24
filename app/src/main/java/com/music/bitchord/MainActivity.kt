@@ -139,8 +139,16 @@ import com.music.bitchord.auth.YtMusicLoginScreen
 import com.music.bitchord.data.AppUpdateChecker
 import com.music.bitchord.data.LocalBuild
 import com.music.bitchord.data.LocalMediaRepository
+import com.music.bitchord.data.animatedcover.AnimatedCover
 import com.music.bitchord.data.artistart.ArtistArtKind
 import com.music.bitchord.data.artistart.LocalArtistArt
+import com.music.bitchord.data.local.localArtistBrowseId
+import com.music.bitchord.data.local.localBrowseType
+import com.music.bitchord.data.local.localHomeShelves
+import com.music.bitchord.data.local.localMostPlayed
+import com.music.bitchord.data.local.localPlaylistRefs
+import com.music.bitchord.data.local.localSearchResults
+import com.music.bitchord.data.local.rememberLocalSongs
 import com.music.bitchord.data.listentogether.JamInviteLink
 import com.music.bitchord.data.listentogether.ListenTogether
 import com.music.bitchord.data.listentogether.partyQueueIndexOf
@@ -589,8 +597,29 @@ private fun BitChordApp(
     // rather than inside the bar because the page's scroll is what drives it,
     // and the page is a sibling of the bar rather than a child.
     val navBarScroll = rememberFloatingTabBarScrollConnection()
-    var selectedTab by rememberSaveable {
-        mutableIntStateOf(if (LocalBuild.OFFLINE_ONLY) 0 else TAB_HOME)
+    var selectedTab by rememberSaveable { mutableIntStateOf(TAB_HOME) }
+    // The Local edition's bar has three tabs where the full build has five, so
+    // a bar position and the tab it opens are not the same number. The tab
+    // constants stay the app's own everywhere else; only the bar translates.
+    val barIndexForTab = if (LocalBuild.OFFLINE_ONLY) {
+        when (selectedTab) {
+            TAB_SEARCH -> 1
+            TAB_LIBRARY -> 2
+            else -> 0
+        }
+    } else {
+        selectedTab
+    }
+    val tabForBarIndex: (Int) -> Int = { index ->
+        if (LocalBuild.OFFLINE_ONLY) {
+            when (index) {
+                1 -> TAB_SEARCH
+                2 -> TAB_LIBRARY
+                else -> TAB_HOME
+            }
+        } else {
+            index
+        }
     }
     // ---- Artist artwork overrides ----
     // A gallery pick replaces the artist page's own photograph and logo; the
@@ -614,6 +643,31 @@ private fun BitChordApp(
                         Toast.LENGTH_SHORT,
                     ).show()
                 }
+            }
+        }
+    }
+    // ---- Custom animated cover ----
+    // The looping picture picked for one track. Android's own gallery picker
+    // is asked for images *and* video, so a GIF, an animated WebP and a short
+    // MP4/WebM clip are all fair game; the file is copied into internal
+    // storage and every artwork surface redraws from [AnimatedCover.revision].
+    var animatedCoverTarget by remember { mutableStateOf<Song?>(null) }
+    val animatedCoverScope = rememberCoroutineScope()
+    val animatedCoverPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        val song = animatedCoverTarget
+        animatedCoverTarget = null
+        if (uri != null && song != null) {
+            animatedCoverScope.launch {
+                val saved = AnimatedCover.save(context, song, uri)
+                Toast.makeText(
+                    context,
+                    context.getString(
+                        if (saved) R.string.animated_cover_saved else R.string.animated_cover_save_failed,
+                    ),
+                    Toast.LENGTH_SHORT,
+                ).show()
             }
         }
     }
@@ -678,6 +732,35 @@ private fun BitChordApp(
     // artwork slipping down out of the mini player's cover after it.
     val dismissPlayer: () -> Unit = {
         if (reducePlayerMotion) showNowPlaying = false else playerSheetMotion.close()
+    }
+
+    /**
+     * The Local edition's artist navigation. Every artist tap — a track's
+     * credit, a card on Home or Search, the Library's Artists tab — opens the
+     * device's own artist page for that name, never a catalogue channel.
+     */
+    fun openLocalArtist(name: String) {
+        val clean = name.trim()
+        if (clean.isEmpty()) return
+        viewModel.openDetail(
+            browseId = localArtistBrowseId(clean),
+            title = clean,
+            subtitle = context.getString(R.string.artist),
+            thumbnailUrl = null,
+            type = BrowseType.ARTIST,
+        )
+    }
+
+    /** A card from one of the device's own feeds: the local page its id names. */
+    fun openLocalCard(item: ShelfItem) {
+        val id = item.browseId ?: return
+        viewModel.openDetail(
+            browseId = id,
+            title = item.title,
+            subtitle = item.subtitle,
+            thumbnailUrl = item.thumbnailUrl,
+            type = localBrowseType(id),
+        )
     }
     // The far end of the relay from a widget's artwork. Cleared here rather than
     // where it was set, so the request is spent by being served — see
@@ -1113,6 +1196,44 @@ private fun BitChordApp(
             browseId = playlist.browseId,
         )
     }
+
+    // ---- The Local edition's own feeds ----
+    // Home and Search keep their layouts and read the phone instead: one scan
+    // of its audio files behind both, the day's Quick Picks, and whatever
+    // Replay says gets played most. No catalogue is asked for any of it.
+    val localRefresh = remember { mutableIntStateOf(0) }
+    val localSongsState: UiState<List<Song>> =
+        if (LocalBuild.OFFLINE_ONLY) rememberLocalSongs(localRefresh.intValue) else UiState.Loading
+    val localSongs = (localSongsState as? UiState.Success)?.data.orEmpty()
+    val localMostPlayedSongs by produceState(emptyList<Song>(), localSongsState) {
+        value = if (LocalBuild.OFFLINE_ONLY && localSongs.isNotEmpty()) {
+            withContext(Dispatchers.IO) { localMostPlayed(localSongs) }
+        } else {
+            emptyList()
+        }
+    }
+    val localHomeState: UiState<List<HomeShelf>> =
+        remember(localSongsState, localMostPlayedSongs) {
+            when (val state = localSongsState) {
+                is UiState.Success ->
+                    UiState.Success(localHomeShelves(context, state.data, localMostPlayedSongs))
+                is UiState.Error -> UiState.Error(state.message)
+                UiState.Loading -> UiState.Loading
+            }
+        }
+    val localPlaylistCards = remember(offlinePlaylists, localPlaylists) { localPlaylistRefs() }
+    // The Search tab's answer, narrowed by the page's own chips. Null while the
+    // field is empty, which is what the page reads as "nothing asked yet".
+    val localSearchState: UiState<List<SearchResult>>? =
+        remember(localSongs, localPlaylistCards, query, filter) {
+            if (query.isBlank()) return@remember null
+            UiState.Success(localSearchResults(context, localSongs, localPlaylistCards, query, filter))
+        }
+    // Search is the device's own, so the page's Library source is what is
+    // always selected — no YouTube search pipeline is ever armed.
+    LaunchedEffect(Unit) {
+        if (LocalBuild.OFFLINE_ONLY) viewModel.setSearchSource(SearchSource.LIBRARY)
+    }
     // What a browse id is recorded under in Downloads.collections, when it names
     // a release downloaded whole — see BrowseTarget.downloadId. A downloaded
     // playlist's own page and its card both carry the id under the
@@ -1432,11 +1553,15 @@ private fun BitChordApp(
     val sharedLinkLabel = stringResource(R.string.shared_link)
     val openedFileLabel = stringResource(R.string.opened_file)
     val tabs = remember(homeLabel, exploreLabel, radioLabel, libraryLabel, searchLabel) {
-        // The Local edition has one place to be: the device's own music. The
-        // feeds, the mixes, and both searches are catalogue features and have
-        // no tab here at all.
+        // The Local edition keeps the three tabs that read the device itself
+        // — Home, Search and Library — and drops the two that exist only to
+        // reach a catalogue: Explore and Radio.
         if (LocalBuild.OFFLINE_ONLY) {
-            listOf(BottomTab(libraryLabel, BitChordIcons.TabLibrary))
+            listOf(
+                BottomTab(homeLabel, BitChordIcons.Home),
+                BottomTab(searchLabel, BitChordIcons.TabSearch),
+                BottomTab(libraryLabel, BitChordIcons.TabLibrary),
+            )
         } else {
             listOf(
                 BottomTab(homeLabel, BitChordIcons.Home),
@@ -1973,6 +2098,23 @@ private fun BitChordApp(
         type: BrowseType,
         artwork: String? = null,
     ) {
+        // The Local edition names its own pages, so there is nothing to look
+        // up — an artist opens by name, anything else only when its id is one
+        // of the device's own.
+        if (LocalBuild.OFFLINE_ONLY) {
+            if (type == BrowseType.ARTIST) {
+                openLocalArtist(name)
+            } else if (browseId != null) {
+                viewModel.openDetail(
+                    browseId,
+                    name,
+                    subtitle ?: "",
+                    artwork,
+                    type,
+                )
+            }
+            return
+        }
         if (browseId != null) {
             val credit = subtitle ?: context.getString(
                 if (type == BrowseType.ARTIST) R.string.artist else R.string.album,
@@ -2315,6 +2457,9 @@ private fun BitChordApp(
             viewModel.reloadLocalDetail("local:all")
             viewModel.reloadLocalDetail("local:downloads")
             viewModel.loadLibrarySongs()
+            // Home and Search read the device themselves, so the grant has to
+            // reach their scan as well as the library page's.
+            localRefresh.intValue++
         } else {
             Toast.makeText(context, context.getString(R.string.storage_required_read), Toast.LENGTH_SHORT).show()
         }
@@ -2650,6 +2795,9 @@ private fun BitChordApp(
         if (!playerShowing) return@LaunchedEffect
         val current = player.song ?: return@LaunchedEffect
         if (current.albumId != null && current.artistId != null) return@LaunchedEffect
+        // A device file's album and artist are its tags, not catalogue ids, and
+        // the Local edition has nothing to ask.
+        if (LocalBuild.OFFLINE_ONLY || current.localUri != null) return@LaunchedEffect
         linksLoading = true
         links = YtMusicRepository.trackLinks(current.videoId).getOrNull()
         linksLoading = false
@@ -2902,7 +3050,10 @@ private fun BitChordApp(
             // picture, and the page fills its own in once loaded.
             onOpenArtist = { id, name ->
                 dismissPlayer()
-                if (id != null) {
+                if (LocalBuild.OFFLINE_ONLY) {
+                    // Nothing online is worth asking: the artist is on the device.
+                    openLocalArtist(name)
+                } else if (id != null) {
                     viewModel.openDetail(
                         id,
                         name,
@@ -3566,7 +3717,13 @@ private fun BitChordApp(
                                 searching = detailSearching && page.browseId == detail?.browseId,
                                 onSearchingChange = { detailSearching = it },
                                 onArtistClick = { id, name ->
-                                    viewModel.openDetail(id, name, "Artist", null, BrowseType.ARTIST)
+                                    // The Local edition always opens the device's own
+                                    // artist page; the full build follows the channel id.
+                                    if (LocalBuild.OFFLINE_ONLY) {
+                                        openLocalArtist(name)
+                                    } else {
+                                        viewModel.openDetail(id, name, "Artist", null, BrowseType.ARTIST)
+                                    }
                                 },
                                 onAddSuggested = { song -> viewModel.addSuggestedSong(page.browseId, song) },
                                 // Saving is an account action, so it isn't offered to a
@@ -3625,13 +3782,130 @@ private fun BitChordApp(
                                     null
                                 },
                             )
-                        } else if (LocalBuild.OFFLINE_ONLY) {
-                            // The Local edition opens straight onto the device's
-                            // own library. If its page has been cleared (a tap on
-                            // the one tab, or Back landing here), reopen it rather
-                            // than ever drawing a feed.
-                            LaunchedEffect(destination) { openLocalLibrary() }
-                            Box(Modifier.fillMaxSize())
+                        } else if (LocalBuild.OFFLINE_ONLY) when ((destination as? AppDestination.Tab)?.index ?: selectedTab) {
+                            // ---- Search: the device's songs, albums, artists and
+                            // playlists, in the page's own layout ----
+                            TAB_SEARCH -> SearchScreen(
+                                query = query,
+                                onQueryChange = viewModel::onQueryChange,
+                                filter = filter,
+                                currentSong = player.song,
+                                isPlaying = player.isPlaying,
+                                onFilterChange = viewModel::onFilterChange,
+                                results = localSearchState,
+                                loadingMore = false,
+                                onLoadMore = {},
+                                listState = searchListState,
+                                scrollResetTrigger = searchScrollReset,
+                                focusRequested = searchFocusRequested,
+                                onFocusHandled = { searchFocusRequested = false },
+                                // Files are a running order to play through, not
+                                // a station to seed.
+                                onSongClick = { songs, index ->
+                                    playFrom(
+                                        songs,
+                                        index,
+                                        QueueSource(
+                                            context.getString(R.string.local_music),
+                                            PlaybackSourceType.BROWSE,
+                                            "local:all",
+                                        ),
+                                    )
+                                },
+                                onSongLongPress = openSongMenu,
+                                onSongSwipe = onSongSwipe,
+                                onTopResultPlay = { song ->
+                                    val index = localSongs.indexOfFirst { it.videoId == song.videoId }
+                                    playFrom(
+                                        if (index >= 0) localSongs else listOf(song),
+                                        if (index >= 0) index else 0,
+                                        QueueSource(
+                                            context.getString(R.string.local_music),
+                                            PlaybackSourceType.BROWSE,
+                                            "local:all",
+                                        ),
+                                    )
+                                },
+                                onTopResultPlaylist = { song ->
+                                    val index = localSongs.indexOfFirst { it.videoId == song.videoId }
+                                    playFrom(
+                                        if (index >= 0) localSongs else listOf(song),
+                                        if (index >= 0) index else 0,
+                                        QueueSource(
+                                            context.getString(R.string.local_music),
+                                            PlaybackSourceType.BROWSE,
+                                            "local:all",
+                                        ),
+                                    )
+                                },
+                                onBrowseClick = { item ->
+                                    viewModel.openDetail(
+                                        browseId = item.browseId,
+                                        title = item.title,
+                                        subtitle = item.subtitle,
+                                        thumbnailUrl = item.thumbnailUrl,
+                                        type = item.type,
+                                    )
+                                },
+                                history = emptyList(),
+                                suggestions = emptyList(),
+                                typeaheadResults = emptyList(),
+                                onSubmit = viewModel::submitSearch,
+                                onSuggestionClick = viewModel::searchFor,
+                                onHistoryClick = {},
+                                onHistoryRemove = {},
+                                onHistoryClear = {},
+                                contentPadding = listPadding,
+                                topPadding = topBarHeight() + 4.dp,
+                                showField = false,
+                            )
+                            // ---- Library: the device, read as Songs / Albums /
+                            // Artists / Playlists on the folder page it opens ----
+                            TAB_LIBRARY -> {
+                                LaunchedEffect(destination) { openLocalLibrary() }
+                                Box(Modifier.fillMaxSize())
+                            }
+                            // ---- Home: the original layout, fed from the phone ----
+                            else -> HomeScreen(
+                                state = localHomeState,
+                                listState = homeListState,
+                                currentSong = player.song,
+                                isPlaying = player.isPlaying,
+                                title = stringResource(R.string.listen_now),
+                                // No account, so no sign-in banner and no cloud
+                                // badges: everything here is already on the phone.
+                                signedIn = true,
+                                onSignIn = null,
+                                onItemClick = { item, shelfTitle ->
+                                    val videoId = item.videoId
+                                    if (videoId != null) {
+                                        val index = localSongs.indexOfFirst { it.videoId == videoId }
+                                        if (index >= 0) {
+                                            playFrom(
+                                                localSongs,
+                                                index,
+                                                QueueSource(shelfTitle, PlaybackSourceType.HOME),
+                                            )
+                                        }
+                                    } else {
+                                        openLocalCard(item)
+                                    }
+                                },
+                                // A device track's menu is the track menu; a card
+                                // for an album, artist or playlist opens its page.
+                                onItemLongPress = { item ->
+                                    val song = item.videoId?.let { id ->
+                                        localSongs.firstOrNull { it.videoId == id }
+                                    }
+                                    if (song != null) openSongMenu(song) else onBrowseLongPress(item)
+                                },
+                                onRetry = { localRefresh.intValue++ },
+                                refreshing = false,
+                                onRefresh = { localRefresh.intValue++ },
+                                pullState = homePull,
+                                contentPadding = listPadding,
+                                artworkMotion = artworkMotion,
+                            )
                         } else when ((destination as? AppDestination.Tab)?.index ?: selectedTab) {
                             TAB_HOME -> HomeScreen(
                                 state = visibleHomeState,
@@ -4089,9 +4363,9 @@ private fun BitChordApp(
                             detail != null && detailActiveShelf != null -> detailActiveShelf?.title.orEmpty()
                             detail != null -> detail.title
                             selectedMoodGenre != null -> selectedMoodGenre?.title.orEmpty()
-                            else -> tabs[selectedTab].let {
+                            else -> tabs.getOrNull(barIndexForTab)?.let {
                                 if (it.label == "Play") stringResource(R.string.listen_now) else it.label
-                            }
+                            } ?: stringResource(R.string.home)
                         }
                     },
                     // Every page, in either material, uses separated floating
@@ -4504,16 +4778,17 @@ private fun BitChordApp(
                 // One tab handler, whichever bar is drawing it.
                 // A tab is a fresh start: everything pushed over the old one —
                 // routes and release pages alike — goes with it.
-                val onTabSelected: (Int) -> Unit = { index ->
+                val onTabSelected: (Int) -> Unit = { barIndex ->
+                    // A bar position, not a tab constant — the Local edition's
+                    // three tabs sit at 0..2 while the app's own are 0/3/4.
+                    val index = tabForBarIndex(barIndex)
                     navigator.clear()
                     viewModel.closeMoodGenre()
                     selectedTab = index
 
                     // Every search tab tap resets the field, focuses it, and opens
-                    // the keyboard through SearchScreen's focus request. The Local
-                    // edition has no search tab; its cleared page reopens itself
-                    // under the bar.
-                    if (!LocalBuild.OFFLINE_ONLY && index == TAB_SEARCH) {
+                    // the keyboard through SearchScreen's focus request.
+                    if (index == TAB_SEARCH) {
                         viewModel.onQueryChange("")
                         searchFocusRequested = true
                     }
@@ -4549,7 +4824,7 @@ private fun BitChordApp(
                     // and the pair folds together on scroll. See [GlassNavBar].
                     GlassNavBar(
                         tabs = tabs,
-                        selectedIndex = selectedTab,
+                        selectedIndex = barIndexForTab,
                         onTabSelected = onTabSelected,
                         scrollConnection = navBarScroll,
                         song = player.song,
@@ -4617,7 +4892,7 @@ private fun BitChordApp(
                     }
                     FloatingBottomBar(
                         tabs = tabs,
-                        selectedIndex = selectedTab,
+                        selectedIndex = barIndexForTab,
                         hazeState = hazeState,
                         onTabSelected = onTabSelected,
                         onActiveTabTap = onActiveTabTap,
@@ -4695,8 +4970,12 @@ private fun BitChordApp(
             val openPage: (String, String, String, BrowseType) -> Unit = { id, title, sub, type ->
                 songActions = null
                 dismissPlayer()
-                val art = song.thumbnailUrl.takeUnless { type == BrowseType.ARTIST }
-                viewModel.openDetail(id, title, sub, art, type)
+                if (LocalBuild.OFFLINE_ONLY && type == BrowseType.ARTIST) {
+                    openLocalArtist(title)
+                } else {
+                    val art = song.thumbnailUrl.takeUnless { type == BrowseType.ARTIST }
+                    viewModel.openDetail(id, title, sub, art, type)
+                }
             }
             // Video vs audio, moved here from the player's own controls: it is
             // the same kind of choice as Revert to original / Upgrade
@@ -4822,9 +5101,37 @@ private fun BitChordApp(
                 value = song.localUri == null &&
                     withContext(Dispatchers.IO) { AudioCache.holds(song.videoId) }
             }
+            // Whether this track already has a looping cover, read once per
+            // cover rather than on every recomposition of the sheet.
+            val animatedCoverRevision by AnimatedCover.revision.collectAsStateWithLifecycle()
+            val hasAnimatedCover = remember(song.videoId, song.albumName, animatedCoverRevision) {
+                AnimatedCover.has(context, song)
+            }
             SongActionsMenu(
                 song = song,
                 fromQueue = fromQueue,
+                // The player's menu is where a track's own looping artwork is
+                // picked. The gallery opens for images and video alike, and the
+                // file is copied into the app's own storage rather than linked.
+                onSetAnimatedCover = if (fromPlayer && !fromQueue) {
+                    {
+                        songActions = null
+                        animatedCoverTarget = song
+                        animatedCoverPicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
+                        )
+                    }
+                } else {
+                    null
+                },
+                onResetAnimatedCover = if (fromPlayer && !fromQueue && hasAnimatedCover) {
+                    {
+                        songActions = null
+                        AnimatedCover.reset(context, song)
+                    }
+                } else {
+                    null
+                },
                 signedIn = signedIn,
                 likeStatus = likeStatusOf(song),
                 onPlayNext = { playNext(song); songActions = null },
@@ -4927,7 +5234,13 @@ private fun BitChordApp(
                     )
                 },
                 onOpenArtist = { id ->
-                    openPage(id, song.artist, context.getString(R.string.artist), BrowseType.ARTIST)
+                    if (LocalBuild.OFFLINE_ONLY) {
+                        songActions = null
+                        dismissPlayer()
+                        openLocalArtist(song.artist)
+                    } else {
+                        openPage(id, song.artist, context.getString(R.string.artist), BrowseType.ARTIST)
+                    }
                 },
                 // The player backfills its own track; any other row is
                 // looked up as the menu opens — see `needsLinks` above.

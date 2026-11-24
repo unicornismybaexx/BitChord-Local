@@ -35,6 +35,15 @@
     <string name="set_artist_logo">Set Artist Logo (PNG)</string>
     <string name="reset_artist_art">Reset Artist Art</string>
     <string name="artist_art_save_failed">Couldn\'t save that image</string>
+    <string name="set_animated_cover">Set Animated Cover</string>
+    <string name="reset_animated_cover">Reset Animated Cover</string>
+    <string name="animated_cover_saved">Animated cover set</string>
+    <string name="animated_cover_save_failed">Couldn\'t save that cover</string>
+    <string name="local_recently_added">Recently Added</string>
+    <string name="local_most_played">Most Played</string>
+    <string name="local_albums">Local Albums</string>
+    <string name="local_artists">Local Artists</string>
+    <string name="local_quick_picks">Quick Picks</string>
     <string name="search_source_youtube" translatable="false">YouTube</string>
     <string name="search_source_addons">Addons</string>
     <string name="search_addons_none">No addons are enabled. Add one in Settings → Sources.</string>

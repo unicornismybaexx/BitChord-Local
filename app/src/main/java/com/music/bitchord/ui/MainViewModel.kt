@@ -928,6 +928,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun loadSongMenu(videoId: String?) {
         songMenuJob?.cancel()
         _songMenu.value = null
+        // The Local edition has no account to ask, and a device file has no
+        // catalogue entry to answer with.
+        if (LocalBuild.OFFLINE_ONLY) return
         if (videoId == null || !_signedIn.value) return
         songMenuJob = viewModelScope.launch {
             val menu = YtMusicRepository.songMenu(videoId).getOrNull() ?: return@launch
@@ -1742,6 +1745,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun loadExplore() {
+        if (LocalBuild.OFFLINE_ONLY) return
         exploreRequested = true
         _explore.value = UiState.Loading
         viewModelScope.launch { fetchExplore() }
@@ -1759,6 +1763,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var mixesRequested = false
 
     fun loadMixes() {
+        if (LocalBuild.OFFLINE_ONLY) return
         mixesRequested = true
         val identity = listenerKey()
         mixesRequestedFor = identity
@@ -1857,6 +1862,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun loadHome() {
+        // Home in the Local edition is built from the device, not fetched.
+        if (LocalBuild.OFFLINE_ONLY) return
         val identity = listenerKey()
         val generation = homeLoadGeneration.incrementAndGet()
         _home.value = UiState.Loading
@@ -2079,6 +2086,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun loadLibrary() {
+        if (LocalBuild.OFFLINE_ONLY) return
         if (!_signedIn.value) return
         val identity = listenerKey()
         _library.value = UiState.Loading
@@ -2133,6 +2141,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * history on.
      */
     fun loadHistory() {
+        if (LocalBuild.OFFLINE_ONLY) {
+            _history.value = UiState.Error(text(R.string.history_sign_in_required))
+            return
+        }
         if (!_signedIn.value) {
             _history.value = UiState.Error(text(R.string.history_sign_in_required))
             return
@@ -2397,6 +2409,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun onFilterChange(value: SearchFilter) {
         if (_filter.value == value) return
         _filter.value = value
+        // The Local edition's chips narrow the device's own results; there is
+        // no request behind them to run.
+        if (LocalBuild.OFFLINE_ONLY) return
         searchSubmitted = true
         // A tab already fetched for this query is shown from the cache rather
         // than asked again; one that has not been is fetched signed in, so its
@@ -2822,7 +2837,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     ?.takeIf { !it.playlist }
                     ?.let { BrowseType.ALBUM }
                     ?: BrowseType.PLAYLIST
-            browseId.startsWith(LocalGroups.PREFIX) -> LocalGroups.typeOf(browseId) ?: fallback
+            // A local artist grouping is an artist page like any other — its
+            // header is the one with the title and the picked artwork, not a
+            // release header with a sleeve.
+            browseId.startsWith(LocalGroups.PREFIX) ->
+                if (LocalGroups.isArtist(browseId)) BrowseType.ARTIST else LocalGroups.typeOf(browseId) ?: fallback
             browseId.startsWith(OfflinePlaylists.PREFIX) -> BrowseType.PLAYLIST
             browseId.startsWith("UC") -> BrowseType.ARTIST
             browseId.startsWith("MPREb") || browseId.startsWith("VLOLAK") || browseId.startsWith("OLAK") -> BrowseType.ALBUM
@@ -2963,8 +2982,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (thumbnailUrl == null) artwork = record?.thumbnailUrl ?: group?.thumbnailUrl
                 if (subtitle.isBlank()) credit = (record?.subtitle ?: group?.subtitle)?.ifBlank { null }
             }
+            // An artist page in the Local edition starts with no picture: no
+            // album cover and no song art is borrowed as its banner or logo.
+            // Only the gallery-picked pair on the page itself supplies one.
+            if (LocalBuild.OFFLINE_ONLY && resolved == BrowseType.ARTIST) artwork = null
             val state = when {
                 local != null -> local
+                // The Local edition never falls through to a catalogue lookup:
+                // a page it cannot read from the device is simply empty.
+                LocalBuild.OFFLINE_ONLY -> UiState.Error(text(R.string.no_tracks_here))
                 resolved == BrowseType.ARTIST -> {
                     YtMusicRepository.artistPage(browseId).fold(
                         onSuccess = { page ->
@@ -3141,13 +3167,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun openLocalGroup(group: LocalGroup) {
         if (_detailStack.value.lastOrNull()?.browseId == group.browseId) return
+        // An artist grouping opens the artist page itself, so its header is the
+        // plain title and whatever artwork was picked for it — never a sleeve.
+        val isArtist = LocalGroups.isArtist(group.browseId)
         _detailStack.value += DetailPage(
             browseId = group.browseId,
             title = group.title,
             subtitle = group.subtitle,
-            thumbnailUrl = group.thumbnailUrl,
+            thumbnailUrl = group.thumbnailUrl.takeUnless { isArtist },
             songs = if (group.songs.isEmpty()) UiState.Error(text(R.string.no_tracks_here)) else UiState.Success(group.songs),
-            type = group.type,
+            type = if (isArtist) BrowseType.ARTIST else group.type,
         )
     }
 

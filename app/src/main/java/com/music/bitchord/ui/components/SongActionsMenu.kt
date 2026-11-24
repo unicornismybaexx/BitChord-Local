@@ -1,5 +1,6 @@
 package com.music.bitchord.ui.components
 
+import com.music.bitchord.data.LocalBuild
 import com.music.bitchord.ui.icons.BrokenHeart
 import com.music.bitchord.ui.icons.SfIcons
 import com.music.bitchord.ui.components.trackArtSize
@@ -187,6 +188,13 @@ fun SongActionsMenu(
     resolvingLinks: Boolean = false,
     /** Queue rows already belong to the queue, so hide its insertion actions. */
     fromQueue: Boolean = false,
+    /**
+     * Opens the gallery to pick a looping picture for the playing track. Null
+     * hides the row — only the full player's menu offers it.
+     */
+    onSetAnimatedCover: (() -> Unit)? = null,
+    /** Removes whatever looping picture the track has. Null when it has none. */
+    onResetAnimatedCover: (() -> Unit)? = null,
 ) {
     var showingSongInfo by remember(song.videoId) { mutableStateOf(false) }
     var pickingSleepTimer by remember { mutableStateOf(false) }
@@ -347,6 +355,24 @@ fun SongActionsMenu(
             )
         }
         WebDavUploadRow(song, palette, isOffline, onUploadToWebDav)
+        // A looping picture for the artwork slot, picked from the gallery and
+        // kept on this device. The reset row only appears once one is set.
+        onSetAnimatedCover?.let {
+            ActionRow(
+                icon = SfIcons.Animation,
+                label = stringResource(R.string.set_animated_cover),
+                accent = palette.accent,
+                onClick = it,
+            )
+        }
+        onResetAnimatedCover?.let {
+            ActionRow(
+                icon = SfIcons.MotionPhotosOff,
+                label = stringResource(R.string.reset_animated_cover),
+                accent = palette.accent,
+                onClick = it,
+            )
+        }
         onRemoveFromHistory?.let {
             ActionRow(
                 icon = SfIcons.History,
@@ -370,8 +396,18 @@ fun SongActionsMenu(
             ) { onOpenAlbum(id) }
         }
         when (val id = song.artistId) {
-            null -> if (resolvingLinks) {
-                LoadingActionRow(SfIcons.Artist, stringResource(R.string.open_artist), palette)
+            null -> when {
+                // A device file has no artist page id, but it does know who
+                // made it — the Local edition opens that artist's own page by
+                // name rather than looking anybody up.
+                LocalBuild.OFFLINE_ONLY && song.artist.isNotBlank() -> ActionRow(
+                    SfIcons.Artist,
+                    stringResource(R.string.open_artist),
+                    accent = palette.accent,
+                    description = song.artist,
+                ) { onOpenArtist(song.artist) }
+                resolvingLinks -> LoadingActionRow(SfIcons.Artist, stringResource(R.string.open_artist), palette)
+                else -> Unit
             }
             else -> ActionRow(
                 SfIcons.Artist,

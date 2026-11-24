@@ -14,7 +14,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.music.bitchord.data.animatedcover.AnimatedCover
 import com.music.bitchord.data.canvas.CanvasArtwork
 import com.music.bitchord.data.canvas.CanvasRepository
 import com.music.bitchord.data.listentogether.ListenTogether
@@ -128,6 +130,19 @@ class AndroidPlayerHost(context: Context) : PlayerHost {
     override fun cachedCanvas(song: Song): CanvasArtwork? = CanvasRepository.cached(song)
 
     override suspend fun canvasFor(song: Song): CanvasArtwork? = CanvasRepository.canvasFor(song)
+
+    /**
+     * A custom looping cover is a local video file, so it needs no lookup and
+     * is offered even where every online canvas is switched off.
+     */
+    @Composable
+    override fun customAnimatedCover(song: Song?): CanvasArtwork? {
+        val context = LocalContext.current
+        val revision by AnimatedCover.revision.collectAsStateWithLifecycle()
+        return remember(song?.videoId, song?.albumName, revision) {
+            AnimatedCover.videoCanvas(context, song)
+        }
+    }
 
     override suspend fun bestPartMs(song: Song): Long? =
         com.music.bitchord.ui.replay.year.BestParts.startFor(app, song)

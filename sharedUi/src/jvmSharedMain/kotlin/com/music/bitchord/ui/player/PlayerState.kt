@@ -42,6 +42,9 @@ import kotlinx.coroutines.launch
  */
 @Composable
 internal fun rememberCanvasArtwork(song: Song): CanvasArtwork? {
+    // A cover the listener picked themselves is already on this device, so it
+    // is not a lookup and none of the network switches below apply to it.
+    PlayerPlatform.host.customAnimatedCover(song)?.let { return it }
     val canvasEnabled by PlayerSettings.animatedCanvas.collectAsStateWithLifecycle()
     val canvasOverCellular by PlayerSettings.canvasOverCellular.collectAsStateWithLifecycle()
     val disableSpotifyCanvas by PlayerSettings.disableSpotifyCanvas.collectAsStateWithLifecycle()

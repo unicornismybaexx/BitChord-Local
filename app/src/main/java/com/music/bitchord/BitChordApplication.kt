@@ -14,6 +14,8 @@ import coil3.memory.MemoryCache
 import coil3.request.allowHardware
 import coil3.request.crossfade
 import coil3.svg.SvgDecoder
+import coil3.gif.AnimatedImageDecoder
+import coil3.gif.GifDecoder
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import okhttp3.OkHttpClient
 import com.music.bitchord.auth.AuthStore
@@ -66,6 +68,11 @@ class BitChordApplication : Application(), SingletonImageLoader.Factory, Configu
     @kotlin.OptIn(ExperimentalComposeUiApi::class)
     override fun onCreate() {
         super.onCreate()
+        // The Local edition is offline by design: this is what makes any
+        // catalogue request that slips past a screen a no-op rather than a
+        // network call. Set before anything else can make one.
+        com.music.bitchord.data.NetworkPolicy.offlineOnly =
+            com.music.bitchord.data.LocalBuild.OFFLINE_ONLY
         // The player is drawn by the shared UI module; this is what it reads
         // underneath — settings, the Canvas decoder, outputs, the party.
         AndroidStreamHooks.installEarly()
@@ -266,6 +273,14 @@ class BitChordApplication : Application(), SingletonImageLoader.Factory, Configu
                 // Artist signatures are usually SVG, which Coil can't
                 // decode without this. See ArtistSignatureRepository.
                 add(SvgDecoder.Factory())
+                // A user-picked animated cover can be a GIF or an animated
+                // WebP: ImageDecoder (API 28+) plays both, GifDecoder covers
+                // the older phone. See com.music.bitchord.data.animatedcover.
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                    add(AnimatedImageDecoder.Factory())
+                } else {
+                    add(GifDecoder.Factory())
+                }
                 // Wikimedia 403s Coil's default client; see [coilHttpClient].
                 add(OkHttpNetworkFetcherFactory(callFactory = { coilHttpClient }))
             }

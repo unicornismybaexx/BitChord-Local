@@ -56,6 +56,15 @@ interface PlayerHost {
     /** A Canvas already settled for [song], without a lookup. */
     fun cachedCanvas(song: Song): CanvasArtwork?
 
+    /**
+     * A looping picture the listener picked for [song] themselves — a short
+     * video clip kept on this device. Played over the sleeve exactly as a
+     * published Canvas is, and subject to none of the network settings that
+     * one is: it is already here.
+     */
+    @Composable
+    fun customAnimatedCover(song: Song?): CanvasArtwork? = null
+
     /** Looks a Canvas up for [song]; null is the normal answer. */
     suspend fun canvasFor(song: Song): CanvasArtwork?
 

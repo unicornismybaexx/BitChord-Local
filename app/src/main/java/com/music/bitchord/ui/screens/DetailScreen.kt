@@ -1113,11 +1113,17 @@ private fun ReleaseHeader(
                     .padding(horizontal = HEADER_GUTTER)
                     .let { m ->
                         val id = artist?.artistId
-                        if (id == null || onArtistClick == null) {
+                        val artistName = artist?.artist.orEmpty()
+                        // A device file has no channel id, but the name is
+                        // still the artist — the Local edition opens that
+                        // artist's own page from it.
+                        val opens = onArtistClick != null && artistName.isNotBlank() &&
+                            (id != null || LocalBuild.OFFLINE_ONLY)
+                        if (!opens) {
                             m
                         } else {
                             m.clip(RoundedCornerShape(6.dp))
-                                .clickable { onArtistClick(id, artist.artist) }
+                                .clickable { onArtistClick(id ?: artistName, artistName) }
                         }
                     },
             )
