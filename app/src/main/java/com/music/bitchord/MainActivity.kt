@@ -156,6 +156,7 @@ import com.music.bitchord.data.listentogether.partyQueueIndexOf
 import com.music.bitchord.data.NerdStats
 import com.music.bitchord.data.TrackLog
 import com.music.bitchord.data.innertube.InnertubeParser
+import com.music.bitchord.data.model.BrowseItem
 import com.music.bitchord.data.model.BrowseType
 import com.music.bitchord.data.model.HomeShelf
 import com.music.bitchord.data.model.LikeStatus
@@ -7038,6 +7039,7 @@ private fun rememberLocalFeed(query: String, filter: SearchFilter, refresh: Int)
  * Home, Search and Library as the Local edition draws them: the app's own
  * layout, fed from the device alone — no feed, no request, no account.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LocalTabContent(
     tab: Int,
