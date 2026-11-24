@@ -269,6 +269,21 @@ private val ARTIST_ACTION_GAP = 24.dp
 /** The title logo's widest share of the page, and tallest share of the photo. */
 private const val ARTIST_LOGO_WIDTH = 0.82f
 
+/**
+ * A picked logo is the artist's own wordmark rather than a catalogue title, so
+ * it is given more room: up to 300 dp wide and 88 dp tall — or 104 dp when it
+ * is closer to square, which by height alone would otherwise come out small.
+ * Its own share of [ARTIST_LOGO_WIDTH] still applies, so it never touches the
+ * screen's edges.
+ */
+private val LOCAL_LOGO_MAX_WIDTH = 300.dp
+private val LOCAL_LOGO_MAX_HEIGHT = 88.dp
+private val LOCAL_LOGO_MAX_HEIGHT_TALL = 104.dp
+private const val LOCAL_LOGO_TALL_BELOW_ASPECT = 2.5f
+
+/** Wide, because that is what a wordmark is, until the file itself says. */
+private const val LOCAL_LOGO_ASSUME_ASPECT = 4f
+
 /** The signature closing the About section. */
 private val ABOUT_LOGO_HEIGHT = 56.dp
 
@@ -1422,8 +1437,13 @@ private fun ArtistHeader(
             // (white paper to transparency, strokes to white); vectors are
             // tinted at draw time instead.
             val isSignatureScan = logoUrl == null && signature != null && !isSignatureSvg
+            // A picked logo is whatever picture the listener chose, so its shape
+            // is read off the file once it has arrived; wide until then.
+            var localLogoAspect by remember(localLogoUrl) {
+                mutableStateOf(LOCAL_LOGO_ASSUME_ASPECT)
+            }
             val aspect = when {
-                localLogoUrl != null -> 1f
+                localLogoUrl != null -> localLogoAspect
                 logoUrl != null -> appleArt?.logoAspect
                 else -> signature?.aspect
             }?.coerceIn(0.4f, 6f) ?: 1f
@@ -1472,7 +1492,15 @@ private fun ArtistHeader(
                 colorFilter = tint,
                 onState = { state ->
                     when (state) {
-                        is AsyncImagePainter.State.Success -> logoShown = true
+                        is AsyncImagePainter.State.Success -> {
+                            logoShown = true
+                            if (localLogoUrl != null) {
+                                val picture = state.painter.intrinsicSize
+                                if (picture.width > 0f && picture.height > 0f) {
+                                    localLogoAspect = picture.width / picture.height
+                                }
+                            }
+                        }
                         is AsyncImagePainter.State.Error -> {
                             val cause = (state as? AsyncImagePainter.State.Error)
                                 ?.result?.throwable?.let { "${it.javaClass.simpleName}: ${it.message}" }
@@ -1487,8 +1515,26 @@ private fun ArtistHeader(
                     // Sized from the incoming width in layout rather than through a
                     // BoxWithConstraints, which would subcompose the image.
                     .layout { measurable, constraints ->
-                        val widest = constraints.maxWidth * ARTIST_LOGO_WIDTH * sizeFactor
-                        val height = minOf(widest / aspect, maxLogoHeight.toPx()).roundToInt()
+                        // A picked logo gets the page's own width up to 300 dp,
+                        // and 88 dp of height — or 104 dp when it is closer to
+                        // square. The box is built around the picture's own
+                        // shape, so a wide wordmark scales up whole instead of
+                        // being letterboxed in a square and drawn small.
+                        val widest = if (localLogoUrl != null) {
+                            minOf(
+                                constraints.maxWidth * ARTIST_LOGO_WIDTH,
+                                LOCAL_LOGO_MAX_WIDTH.toPx(),
+                            )
+                        } else {
+                            constraints.maxWidth * ARTIST_LOGO_WIDTH * sizeFactor
+                        }
+                        val tallest = if (localLogoUrl != null) {
+                            val tall = aspect < LOCAL_LOGO_TALL_BELOW_ASPECT
+                            (if (tall) LOCAL_LOGO_MAX_HEIGHT_TALL else LOCAL_LOGO_MAX_HEIGHT).toPx()
+                        } else {
+                            maxLogoHeight.toPx()
+                        }
+                        val height = minOf(widest / aspect, tallest).roundToInt()
                         val width = (height * aspect).roundToInt()
                         val placeable = measurable.measure(Constraints.fixed(width, height))
                         layout(width, height) { placeable.place(0, 0) }

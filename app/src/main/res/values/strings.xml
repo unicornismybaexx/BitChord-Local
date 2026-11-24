@@ -32,7 +32,7 @@
     <string name="local_music">Local Music</string>
     <string name="edit_artist_art">Edit artist artwork</string>
     <string name="set_artist_banner">Set Artist Banner</string>
-    <string name="set_artist_logo">Set Artist Logo (PNG)</string>
+    <string name="set_artist_logo">Set Artist Logo</string>
     <string name="reset_artist_art">Reset Artist Art</string>
     <string name="artist_art_save_failed">Couldn\'t save that image</string>
     <string name="set_animated_cover">Set Animated Cover</string>
