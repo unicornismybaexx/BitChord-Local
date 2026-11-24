@@ -94,6 +94,7 @@ import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshState
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -646,31 +647,6 @@ private fun BitChordApp(
             }
         }
     }
-    // ---- Custom animated cover ----
-    // The looping picture picked for one track. Android's own gallery picker
-    // is asked for images *and* video, so a GIF, an animated WebP and a short
-    // MP4/WebM clip are all fair game; the file is copied into internal
-    // storage and every artwork surface redraws from [AnimatedCover.revision].
-    var animatedCoverTarget by remember { mutableStateOf<Song?>(null) }
-    val animatedCoverScope = rememberCoroutineScope()
-    val animatedCoverPicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia(),
-    ) { uri ->
-        val song = animatedCoverTarget
-        animatedCoverTarget = null
-        if (uri != null && song != null) {
-            animatedCoverScope.launch {
-                val saved = AnimatedCover.save(context, song, uri)
-                Toast.makeText(
-                    context,
-                    context.getString(
-                        if (saved) R.string.animated_cover_saved else R.string.animated_cover_save_failed,
-                    ),
-                    Toast.LENGTH_SHORT,
-                ).show()
-            }
-        }
-    }
     // Explore loads the first time it's shown, not at launch beside Home.
     LaunchedEffect(selectedTab) {
         if (selectedTab == TAB_EXPLORE) viewModel.onExploreShown()
@@ -1198,40 +1174,9 @@ private fun BitChordApp(
     }
 
     // ---- The Local edition's own feeds ----
-    // Home and Search keep their layouts and read the phone instead: one scan
-    // of its audio files behind both, the day's Quick Picks, and whatever
-    // Replay says gets played most. No catalogue is asked for any of it.
+    // One counter behind Home's and Search's scan of the device; see
+    // [LocalTabContent], which reads the files themselves.
     val localRefresh = remember { mutableIntStateOf(0) }
-    val localSongsState: UiState<List<Song>> =
-        if (LocalBuild.OFFLINE_ONLY) rememberLocalSongs(localRefresh.intValue) else UiState.Loading
-    val localSongs = (localSongsState as? UiState.Success)?.data.orEmpty()
-    val localMostPlayedSongs by produceState(emptyList<Song>(), localSongsState) {
-        value = if (LocalBuild.OFFLINE_ONLY && localSongs.isNotEmpty()) {
-            withContext(Dispatchers.IO) { localMostPlayed(localSongs) }
-        } else {
-            emptyList()
-        }
-    }
-    val localHomeState: UiState<List<HomeShelf>> =
-        remember(localSongsState, localMostPlayedSongs) {
-            when (val state = localSongsState) {
-                is UiState.Success ->
-                    UiState.Success(localHomeShelves(context, state.data, localMostPlayedSongs))
-                is UiState.Error -> UiState.Error(state.message)
-                UiState.Loading -> UiState.Loading
-            }
-        }
-    val localPlaylistCards = remember(offlinePlaylists, localPlaylists) { localPlaylistRefs() }
-    // The Search tab's answer, narrowed by the page's own chips. Null while the
-    // field is empty, which is what the page reads as "nothing asked yet".
-    val localSearchState: UiState<List<SearchResult>>? =
-        remember(localSongs, localPlaylistCards, query, filter) {
-            if (query.isBlank()) {
-                null
-            } else {
-                UiState.Success(localSearchResults(context, localSongs, localPlaylistCards, query, filter))
-            }
-        }
     // Search is the device's own, so the page's Library source is what is
     // always selected — no YouTube search pipeline is ever armed.
     LaunchedEffect(Unit) {
@@ -3785,131 +3730,44 @@ private fun BitChordApp(
                                     null
                                 },
                             )
-                        } else if (LocalBuild.OFFLINE_ONLY) when ((destination as? AppDestination.Tab)?.index ?: selectedTab) {
-                            // ---- Search: the device's songs, albums, artists and
-                            // playlists, in the page's own layout ----
-                            TAB_SEARCH -> SearchScreen(
-                                query = query,
-                                onQueryChange = viewModel::onQueryChange,
-                                filter = filter,
-                                currentSong = player.song,
-                                isPlaying = player.isPlaying,
-                                onFilterChange = viewModel::onFilterChange,
-                                results = localSearchState,
-                                loadingMore = false,
-                                onLoadMore = {},
-                                listState = searchListState,
-                                scrollResetTrigger = searchScrollReset,
-                                focusRequested = searchFocusRequested,
-                                onFocusHandled = { searchFocusRequested = false },
-                                // Files are a running order to play through, not
-                                // a station to seed.
-                                onSongClick = { songs, index ->
-                                    playFrom(
-                                        songs,
-                                        index,
-                                        QueueSource(
-                                            context.getString(R.string.local_music),
-                                            PlaybackSourceType.BROWSE,
-                                            "local:all",
-                                        ),
-                                    )
-                                },
-                                onSongLongPress = openSongMenu,
-                                onSongSwipe = onSongSwipe,
-                                onTopResultPlay = { song ->
-                                    val index = localSongs.indexOfFirst { it.videoId == song.videoId }
-                                    playFrom(
-                                        if (index >= 0) localSongs else listOf(song),
-                                        if (index >= 0) index else 0,
-                                        QueueSource(
-                                            context.getString(R.string.local_music),
-                                            PlaybackSourceType.BROWSE,
-                                            "local:all",
-                                        ),
-                                    )
-                                },
-                                onTopResultPlaylist = { song ->
-                                    val index = localSongs.indexOfFirst { it.videoId == song.videoId }
-                                    playFrom(
-                                        if (index >= 0) localSongs else listOf(song),
-                                        if (index >= 0) index else 0,
-                                        QueueSource(
-                                            context.getString(R.string.local_music),
-                                            PlaybackSourceType.BROWSE,
-                                            "local:all",
-                                        ),
-                                    )
-                                },
-                                onBrowseClick = { item ->
-                                    viewModel.openDetail(
-                                        browseId = item.browseId,
-                                        title = item.title,
-                                        subtitle = item.subtitle,
-                                        thumbnailUrl = item.thumbnailUrl,
-                                        type = item.type,
-                                    )
-                                },
-                                history = emptyList(),
-                                suggestions = emptyList(),
-                                typeaheadResults = emptyList(),
-                                onSubmit = viewModel::submitSearch,
-                                onSuggestionClick = viewModel::searchFor,
-                                onHistoryClick = {},
-                                onHistoryRemove = {},
-                                onHistoryClear = {},
-                                contentPadding = listPadding,
-                                topPadding = topBarHeight() + 4.dp,
-                                showField = false,
-                            )
-                            // ---- Library: the device, read as Songs / Albums /
-                            // Artists / Playlists on the folder page it opens ----
-                            TAB_LIBRARY -> {
-                                LaunchedEffect(destination) { openLocalLibrary() }
-                                Box(Modifier.fillMaxSize())
-                            }
-                            // ---- Home: the original layout, fed from the phone ----
-                            else -> HomeScreen(
-                                state = localHomeState,
-                                listState = homeListState,
-                                currentSong = player.song,
-                                isPlaying = player.isPlaying,
-                                title = stringResource(R.string.listen_now),
-                                // No account, so no sign-in banner and no cloud
-                                // badges: everything here is already on the phone.
-                                signedIn = true,
-                                onSignIn = null,
-                                onItemClick = { item, shelfTitle ->
-                                    val videoId = item.videoId
-                                    if (videoId != null) {
-                                        val index = localSongs.indexOfFirst { it.videoId == videoId }
-                                        if (index >= 0) {
-                                            playFrom(
-                                                localSongs,
-                                                index,
-                                                QueueSource(shelfTitle, PlaybackSourceType.HOME),
-                                            )
-                                        }
-                                    } else {
-                                        openLocalCard(item)
-                                    }
-                                },
-                                // A device track's menu is the track menu; a card
-                                // for an album, artist or playlist opens its page.
-                                onItemLongPress = { item ->
-                                    val song = item.videoId?.let { id ->
-                                        localSongs.firstOrNull { it.videoId == id }
-                                    }
-                                    if (song != null) openSongMenu(song) else onBrowseLongPress(item)
-                                },
-                                onRetry = { localRefresh.intValue++ },
-                                refreshing = false,
-                                onRefresh = { localRefresh.intValue++ },
-                                pullState = homePull,
-                                contentPadding = listPadding,
-                                artworkMotion = artworkMotion,
-                            )
-                        } else when ((destination as? AppDestination.Tab)?.index ?: selectedTab) {
+                        } else if (LocalBuild.OFFLINE_ONLY) LocalTabContent(
+                            tab = (destination as? AppDestination.Tab)?.index ?: selectedTab,
+                            query = query,
+                            filter = filter,
+                            refresh = localRefresh.intValue,
+                            currentSong = player.song,
+                            isPlaying = player.isPlaying,
+                            homeListState = homeListState,
+                            searchListState = searchListState,
+                            searchScrollReset = searchScrollReset,
+                            searchFocusRequested = searchFocusRequested,
+                            onSearchFocusHandled = { searchFocusRequested = false },
+                            homePull = homePull,
+                            contentPadding = listPadding,
+                            artworkMotion = artworkMotion,
+                            onQueryChange = viewModel::onQueryChange,
+                            onFilterChange = viewModel::onFilterChange,
+                            onPlay = { songs, index, type, title ->
+                                playFrom(songs, index, QueueSource(title, type))
+                            },
+                            onSongLongPress = openSongMenu,
+                            onSongSwipe = onSongSwipe,
+                            onSearchSubmit = viewModel::submitSearch,
+                            onSuggestionClick = viewModel::searchFor,
+                            onOpenBrowse = { item ->
+                                viewModel.openDetail(
+                                    browseId = item.browseId,
+                                    title = item.title,
+                                    subtitle = item.subtitle,
+                                    thumbnailUrl = item.thumbnailUrl,
+                                    type = item.type,
+                                )
+                            },
+                            onOpenCard = { item -> openLocalCard(item) },
+                            onCardLongPress = onBrowseLongPress,
+                            onOpenLibrary = openLocalLibrary,
+                            onRefresh = { localRefresh.intValue++ },
+                        ) else when ((destination as? AppDestination.Tab)?.index ?: selectedTab) {
                             TAB_HOME -> HomeScreen(
                                 state = visibleHomeState,
                                 listState = homeListState,
@@ -5104,37 +4962,21 @@ private fun BitChordApp(
                 value = song.localUri == null &&
                     withContext(Dispatchers.IO) { AudioCache.holds(song.videoId) }
             }
-            // Whether this track already has a looping cover, read once per
-            // cover rather than on every recomposition of the sheet.
-            val animatedCoverRevision by AnimatedCover.revision.collectAsStateWithLifecycle()
-            val hasAnimatedCover = remember(song.videoId, song.albumName, animatedCoverRevision) {
-                AnimatedCover.has(context, song)
-            }
+            // Set / Reset for this track's own looping cover — only from the
+            // full player's menu, and Reset only once there is one. See
+            // [rememberAnimatedCoverActions].
+            val coverActions = rememberAnimatedCoverActions(
+                song = song,
+                enabled = fromPlayer && !fromQueue,
+                onDismiss = { songActions = null },
+            )
             SongActionsMenu(
                 song = song,
                 fromQueue = fromQueue,
                 // The player's menu is where a track's own looping artwork is
-                // picked. The gallery opens for images and video alike, and the
-                // file is copied into the app's own storage rather than linked.
-                onSetAnimatedCover = if (fromPlayer && !fromQueue) {
-                    {
-                        songActions = null
-                        animatedCoverTarget = song
-                        animatedCoverPicker.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
-                        )
-                    }
-                } else {
-                    null
-                },
-                onResetAnimatedCover = if (fromPlayer && !fromQueue && hasAnimatedCover) {
-                    {
-                        songActions = null
-                        AnimatedCover.reset(context, song)
-                    }
-                } else {
-                    null
-                },
+                // picked; both rows are wired by [rememberAnimatedCoverActions].
+                onSetAnimatedCover = coverActions.set,
+                onResetAnimatedCover = coverActions.reset,
                 signedIn = signedIn,
                 likeStatus = likeStatusOf(song),
                 onPlayNext = { playNext(song); songActions = null },
@@ -7134,3 +6976,258 @@ private suspend fun LazyListState.scrollToTopEased() {
 
 /** Safely converts a nullable Float to non-null, defaulting to 0f for null. */
 private fun Float?.orZero(): Float = this ?: 0f
+
+/**
+ * What the Local edition's Home and Search are drawn from: the device's own
+ * songs, the shelves built out of them, and the search over them.
+ */
+private class LocalFeed(
+    val songs: List<Song>,
+    val home: UiState<List<HomeShelf>>,
+    val search: UiState<List<SearchResult>>?,
+)
+
+/** Set and Reset for one track's own looping cover; null hides that row. */
+private class AnimatedCoverActions(val set: (() -> Unit)?, val reset: (() -> Unit)?)
+
+/**
+ * The device's audio, read once per [refresh] and shared by Home and Search.
+ *
+ * These and the pages below are hoisted out of [BitChordApp] deliberately: that
+ * function is the app's largest, and a single JVM method may not exceed 64 KB —
+ * the Local edition's screens put it over.
+ */
+@Composable
+private fun rememberLocalFeed(query: String, filter: SearchFilter, refresh: Int): LocalFeed {
+    val context = LocalContext.current
+    val offlinePlaylists by OfflinePlaylists.playlists.collectAsStateWithLifecycle()
+    val localPlaylists by com.music.bitchord.data.spotify.LocalPlaylistStore.playlists
+        .collectAsStateWithLifecycle()
+    val songsState: UiState<List<Song>> =
+        if (LocalBuild.OFFLINE_ONLY) rememberLocalSongs(refresh) else UiState.Loading
+    val songs = (songsState as? UiState.Success)?.data.orEmpty()
+    // Replay's all-time chart, matched back to the files that are still here.
+    val mostPlayed by produceState(emptyList<Song>(), songsState) {
+        value = if (LocalBuild.OFFLINE_ONLY && songs.isNotEmpty()) {
+            withContext(Dispatchers.IO) { localMostPlayed(songs) }
+        } else {
+            emptyList()
+        }
+    }
+    val home: UiState<List<HomeShelf>> = remember(songsState, mostPlayed) {
+        when (songsState) {
+            is UiState.Success -> UiState.Success(localHomeShelves(context, songsState.data, mostPlayed))
+            is UiState.Error -> UiState.Error(songsState.message)
+            UiState.Loading -> UiState.Loading
+        }
+    }
+    val playlists = remember(offlinePlaylists, localPlaylists) { localPlaylistRefs() }
+    // Null while the field is empty, which is what the page reads as "nothing
+    // asked yet".
+    val search: UiState<List<SearchResult>>? = remember(songs, playlists, query, filter) {
+        if (query.isBlank()) {
+            null
+        } else {
+            UiState.Success(localSearchResults(context, songs, playlists, query, filter))
+        }
+    }
+    return LocalFeed(songs = songs, home = home, search = search)
+}
+
+/**
+ * Home, Search and Library as the Local edition draws them: the app's own
+ * layout, fed from the device alone — no feed, no request, no account.
+ */
+@Composable
+private fun LocalTabContent(
+    tab: Int,
+    query: String,
+    filter: SearchFilter,
+    refresh: Int,
+    currentSong: Song?,
+    isPlaying: Boolean,
+    homeListState: LazyListState,
+    searchListState: LazyListState,
+    searchScrollReset: Int,
+    searchFocusRequested: Boolean,
+    onSearchFocusHandled: () -> Unit,
+    homePull: PullToRefreshState,
+    contentPadding: PaddingValues,
+    artworkMotion: Boolean,
+    onQueryChange: (String) -> Unit,
+    onFilterChange: (SearchFilter) -> Unit,
+    onPlay: (List<Song>, Int, PlaybackSourceType, String) -> Unit,
+    onSongLongPress: (Song) -> Unit,
+    onSongSwipe: (Song) -> Unit,
+    onSearchSubmit: () -> Unit,
+    onSuggestionClick: (String) -> Unit,
+    onOpenBrowse: (BrowseItem) -> Unit,
+    onOpenCard: (ShelfItem) -> Unit,
+    onCardLongPress: (ShelfItem) -> Unit,
+    onOpenLibrary: () -> Unit,
+    onRefresh: () -> Unit,
+) {
+    val context = LocalContext.current
+    val feed = rememberLocalFeed(query, filter, refresh)
+    val songs = feed.songs
+    val localLabel = context.getString(R.string.local_music)
+
+    // The tapped hit, played in the order the device lists it.
+    fun playFound(song: Song) {
+        val index = songs.indexOfFirst { it.videoId == song.videoId }
+        onPlay(
+            if (index >= 0) songs else listOf(song),
+            if (index >= 0) index else 0,
+            PlaybackSourceType.BROWSE,
+            localLabel,
+        )
+    }
+
+    when (tab) {
+        // ---- Search: the device's songs, albums, artists and playlists, in
+        // the page's own layout ----
+        TAB_SEARCH -> SearchScreen(
+            query = query,
+            onQueryChange = onQueryChange,
+            filter = filter,
+            currentSong = currentSong,
+            isPlaying = isPlaying,
+            onFilterChange = onFilterChange,
+            results = feed.search,
+            loadingMore = false,
+            onLoadMore = {},
+            listState = searchListState,
+            scrollResetTrigger = searchScrollReset,
+            focusRequested = searchFocusRequested,
+            onFocusHandled = onSearchFocusHandled,
+            // Files are a running order to play through, not a station to seed.
+            onSongClick = { found, index -> onPlay(found, index, PlaybackSourceType.BROWSE, localLabel) },
+            onSongLongPress = onSongLongPress,
+            onSongSwipe = onSongSwipe,
+            onTopResultPlay = { song -> playFound(song) },
+            onTopResultPlaylist = { song -> playFound(song) },
+            onBrowseClick = onOpenBrowse,
+            history = emptyList(),
+            suggestions = emptyList(),
+            typeaheadResults = emptyList(),
+            onSubmit = onSearchSubmit,
+            onSuggestionClick = onSuggestionClick,
+            onHistoryClick = {},
+            onHistoryRemove = {},
+            onHistoryClear = {},
+            contentPadding = contentPadding,
+            topPadding = topBarHeight() + 4.dp,
+            showField = false,
+        )
+        // ---- Library: the device, read as Songs / Albums / Artists /
+        // Playlists on the folder page it opens ----
+        TAB_LIBRARY -> {
+            LaunchedEffect(tab) { onOpenLibrary() }
+            Box(Modifier.fillMaxSize())
+        }
+        // ---- Home: the original layout, fed from the phone ----
+        else -> HomeScreen(
+            state = feed.home,
+            listState = homeListState,
+            currentSong = currentSong,
+            isPlaying = isPlaying,
+            title = stringResource(R.string.listen_now),
+            // No account, so no sign-in banner and no cloud badges: everything
+            // here is already on the phone.
+            signedIn = true,
+            onSignIn = null,
+            onItemClick = { item, shelfTitle ->
+                val videoId = item.videoId
+                val index = if (videoId == null) -1 else songs.indexOfFirst { it.videoId == videoId }
+                if (index >= 0) {
+                    onPlay(songs, index, PlaybackSourceType.HOME, shelfTitle)
+                } else {
+                    onOpenCard(item)
+                }
+            },
+            // A device track's menu is the track menu; a card for an album,
+            // artist or playlist opens its page.
+            onItemLongPress = { item ->
+                val song = item.videoId?.let { id -> songs.firstOrNull { it.videoId == id } }
+                if (song != null) onSongLongPress(song) else onCardLongPress(item)
+            },
+            onRetry = onRefresh,
+            refreshing = false,
+            onRefresh = onRefresh,
+            pullState = homePull,
+            contentPadding = contentPadding,
+            artworkMotion = artworkMotion,
+        )
+    }
+}
+
+/**
+ * The player menu's Set Animated Cover: Android's own gallery picker, asked for
+ * images *and* video so a GIF, an animated WebP and a short MP4/WebM clip are
+ * all fair game. What it returns is copied into the app's own storage, and
+ * every artwork surface redraws from [AnimatedCover.revision].
+ */
+@Composable
+private fun rememberAnimatedCoverPicker(): (Song) -> Unit {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val target = remember { mutableStateOf<Song?>(null) }
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        val song = target.value
+        target.value = null
+        if (uri != null && song != null) {
+            scope.launch {
+                val saved = AnimatedCover.save(context, song, uri)
+                Toast.makeText(
+                    context,
+                    context.getString(
+                        if (saved) R.string.animated_cover_saved else R.string.animated_cover_save_failed,
+                    ),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+    return remember(picker) {
+        { song: Song ->
+            target.value = song
+            picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+        }
+    }
+}
+
+/**
+ * The track menu's two looping-cover rows: Set always, for the playing track,
+ * and Reset once that track has one. [enabled] is what keeps both to the full
+ * player's own menu rather than a queue row's.
+ */
+@Composable
+private fun rememberAnimatedCoverActions(
+    song: Song,
+    enabled: Boolean,
+    onDismiss: () -> Unit,
+): AnimatedCoverActions {
+    val context = LocalContext.current
+    val pickAnimatedCover = rememberAnimatedCoverPicker()
+    // Whether this track already has a looping cover, read once per cover
+    // rather than on every recomposition of the sheet.
+    val revision by AnimatedCover.revision.collectAsStateWithLifecycle()
+    val has = remember(song.videoId, song.albumName, revision) { AnimatedCover.has(context, song) }
+    if (!enabled) return AnimatedCoverActions(set = null, reset = null)
+    return AnimatedCoverActions(
+        set = {
+            onDismiss()
+            pickAnimatedCover(song)
+        },
+        reset = if (has) {
+            {
+                onDismiss()
+                AnimatedCover.reset(context, song)
+            }
+        } else {
+            null
+        },
+    )
+}
