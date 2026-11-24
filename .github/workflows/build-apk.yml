@@ -22,10 +22,29 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
+    # The phone APK only. The TV module builds this app's whole source tree a
+    # second time (see tv/build.gradle.kts) and every phone build bundles the
+    # watch app, so neither belongs in a quick check of the phone app;
+    # -Pbitchord.bundleWear=false is the project's own switch for the latter.
     - name: Build Debug APK
-      run: ./gradlew assembleDebug
+      id: build
+      continue-on-error: true
+      run: |
+        set -o pipefail
+        ./gradlew :app:assembleDebug -Pbitchord.bundleWear=false 2>&1 | tee build.log
+
+    # Kotlin's errors exist only in the log, which is hard to read on a phone.
+    # Surface them as annotations so they show on the run's own page.
+    - name: Report Kotlin errors
+      if: steps.build.outcome == 'failure'
+      run: |
+        grep -E "^(e|w): file" build.log | head -40 | sed 's/%/%25/g; s/\r//g' | while IFS= read -r line; do
+          echo "::error title=Kotlin::$line"
+        done
+        exit 1
 
     - name: Upload Debug APK
+      if: steps.build.outcome == 'success'
       uses: actions/upload-artifact@v4
       with:
         name: bitchord-local-debug-apk

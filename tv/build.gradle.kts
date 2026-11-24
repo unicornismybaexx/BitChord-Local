@@ -376,6 +376,10 @@ dependencies {
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.0.4")
     // The shared app sources register SvgDecoder (artist signatures).
     implementation("io.coil-kt.coil3:coil-svg:3.0.4")
+    // ...and the GIF / animated-WebP decoders for a hand-picked looping cover.
+    // TV builds from the phone's sources, so anything they register has to be
+    // on this classpath too.
+    implementation("io.coil-kt.coil3:coil-gif:3.0.4")
     // SF Symbols as Compose vectors: the shared app sources draw their menus and
     // settings with them. Without its own dependencies, for the reason given in
     // app/build.gradle.kts.

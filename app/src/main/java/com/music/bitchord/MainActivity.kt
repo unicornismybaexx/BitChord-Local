@@ -1226,8 +1226,11 @@ private fun BitChordApp(
     // field is empty, which is what the page reads as "nothing asked yet".
     val localSearchState: UiState<List<SearchResult>>? =
         remember(localSongs, localPlaylistCards, query, filter) {
-            if (query.isBlank()) return@remember null
-            UiState.Success(localSearchResults(context, localSongs, localPlaylistCards, query, filter))
+            if (query.isBlank()) {
+                null
+            } else {
+                UiState.Success(localSearchResults(context, localSongs, localPlaylistCards, query, filter))
+            }
         }
     // Search is the device's own, so the page's Library source is what is
     // always selected — no YouTube search pipeline is ever armed.
