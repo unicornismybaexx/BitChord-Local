@@ -34,12 +34,18 @@ jobs:
         ./gradlew :app:assembleDebug -Pbitchord.bundleWear=false 2>&1 | tee build.log
 
     # Kotlin's errors exist only in the log, which is hard to read on a phone.
-    # Surface them as annotations so they show on the run's own page.
-    - name: Report Kotlin errors
+    # Surface them as annotations so they show on the run's own page — errors
+    # first, and the failing task if the compile itself said nothing, since
+    # GitHub shows ten of them and the warnings would otherwise fill the list.
+    - name: Report build errors
       if: steps.build.outcome == 'failure'
       run: |
-        grep -E "^(e|w): file" build.log | head -40 | sed 's/%/%25/g; s/\r//g' | while IFS= read -r line; do
-          echo "::error title=Kotlin::$line"
+        errors=$(grep -E "^e: " build.log | head -10)
+        if [ -z "$errors" ]; then
+          errors=$(grep -E "^(FAILURE|\* What went wrong|Execution failed|> )" build.log | head -10)
+        fi
+        printf '%s\n' "$errors" | sed 's/%/%25/g; s/\r//g' | while IFS= read -r line; do
+          echo "::error title=Build::$line"
         done
         exit 1
 
